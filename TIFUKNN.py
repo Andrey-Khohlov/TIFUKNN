@@ -829,7 +829,156 @@ def evaluate(data_chunk,  training_key_set, test_key_set, input_size, group_size
 
     return recall, ndcg, hr
     
-def tifuknn()
+def files_transformer(file_history, file_future):
+    print("files transforming...")
+    df = pd.read_csv('train.csv', header = 0, names = ['buyer', 'time', 'item'], sep=',', parse_dates=[1])
+    df['counter'] = df.groupby(['buyer'])['time'].transform(lambda x: pd.factorize(x)[0] + 1)
+    df.rename(columns = {'counter': 'ORDER_NUMBER','buyer': 'CUSTOMER_ID','item': 'MATERIAL_NUMBER'}, inplace = True)
+    df1 = df.reindex(columns = ['CUSTOMER_ID', 'ORDER_NUMBER', 'MATERIAL_NUMBER'])
+    df1.sort_values(['CUSTOMER_ID', 'ORDER_NUMBER'], inplace = True)
+    df1.to_csv("history_TIFU.csv", index = False)
+
+    ss = pd.read_csv('sample_submission.csv')
+    ss['user_id'] = ss['id'].apply(lambda x: x.split(';')[0])
+    ss['cart'] = ss['id'].apply(lambda x: x.split(';')[1])
+    ss.drop('id', axis = 1, inplace = True)
+    next_order_num = (df1.groupby('CUSTOMER_ID')["ORDER_NUMBER"].max()+1).T.to_dict()
+    ss['target'] = ss['user_id'].astype(int).map(next_order_num)
+    ss.rename(columns = {'target': 'ORDER_NUMBER','user_id': 'CUSTOMER_ID','cart': 'MATERIAL_NUMBER'}, inplace = True)
+    ss.sort_values(['CUSTOMER_ID', 'ORDER_NUMBER'], inplace = True)
+    ss1 = ss.reindex(columns = ['CUSTOMER_ID', 'ORDER_NUMBER', 'MATERIAL_NUMBER'], copy=False)
+    ss1.to_csv("future_TIFU.csv", index = False)
+    print("got files")
+    return ["history_TIFU.csv", "future_TIFU.csv"]
+
+def tifuknn(file_history, file_future, topk, num_nearest_neighbors=300, within_decay_rate=0.9, group_decay_rate=0.7, alpha=0.7, group_size =7):
+    #The 300 is the number neighbors. 0.9 is the time-decayed ratio within each group. The first 0.7 is the time-decayed ratio accross groups. The second 0.7 is the alpha for combining two parts in prediction. 7 is the group size. 10 is the top k items recommened.
+
+    files = files_transformer(file_history, file_future)
+
+    data_chunk, input_size, code_freq_at_first_claim, dictionary_table  = read_claim2vector_embedding_file_no_vector(files)
+
+    training_key_set, validation_key_set, test_key_set = partition_the_data_validate(data_chunk, list(data_chunk[test_chunk]), 1)
+
+
+
+    # num_nearest_neighbors = 300
+    # within_decay_rate = 0.9
+    # group_decay_rate = 0.7
+    # alpha = 0.7
+    # group_size = 7
+    # topk = 10
+    
+    activate_codes_num = -1
+    temporal_decay_sum_history_training = temporal_decay_sum_history(data_chunk[training_chunk],
+                                                                     training_key_set, input_size,
+                                                                     group_size, within_decay_rate,
+                                                                     group_decay_rate)
+    temporal_decay_sum_history_test = temporal_decay_sum_history(data_chunk[training_chunk],
+                                                                 test_key_set, input_size,
+                                                                 group_size, within_decay_rate,
+                                                                 group_decay_rate)
+    index, distance = KNN(temporal_decay_sum_history_test, temporal_decay_sum_history_training,
+                          num_nearest_neighbors)
+
+
+    sum_history = merge_history(temporal_decay_sum_history_test, test_key_set, temporal_decay_sum_history_training,
+                                training_key_set, index, alpha)
+
+    if activate_codes_num < 0:
+        # for i in range(1, 6):
+
+        prec = []
+        rec = []
+        F = []
+        prec1 = []
+        rec1 = []
+        F1 = []
+        prec2 = []
+        rec2 = []
+        F2 = []
+        prec3 = []
+        rec3 = []
+        F3 = []
+        NDCG = []
+        n_hit = 0
+        my_output = []
+
+
+        num_ele = topk
+        # print('k = ' + str(activate_codes_num))
+        # evaluate(data_chunk, input_size,test_KNN_history, test_key_set, next_k_step)
+        count = 0
+        for iter in range(len(test_key_set)):
+            # training_pair = training_pairs[iter - 1]
+            # input_variable = training_pair[0]
+            # target_variable = training_pair[1]
+            input_variable = data_chunk[training_chunk][test_key_set[iter]]
+            target_variable = data_chunk[test_chunk][test_key_set[iter]]
+
+            if len(target_variable) < 2 + next_k_step:
+                continue
+            count += 1
+            output_vectors = predict_with_elements_in_input(sum_history, test_key_set[iter])
+            top = 400
+            hit = 0
+            for idx in range(len(output_vectors)):
+                # for idx in [2]:
+
+                output = np.zeros(input_size)
+                target_topi = output_vectors[idx].argsort()[::-1][:top]
+                c = 0
+                for i in range(top):
+                    if c >= num_ele:
+                        break
+                    output[target_topi[i]] = 1
+                    c += 1
+                my_output.append(output)
+                vectorized_target = np.zeros(input_size)
+                for ii in target_variable[1 + idx]:
+                    vectorized_target[ii] = 1
+                precision, recall, Fscore, correct = get_precision_recall_Fscore \
+                    (vectorized_target, output)
+                prec.append(precision)
+                rec.append(recall)
+                F.append(Fscore)
+                if idx == 0:
+                    prec1.append(precision)
+                    rec1.append(recall)
+                    F1.append(Fscore)
+                elif idx == 1:
+                    prec2.append(precision)
+                    rec2.append(recall)
+                    F2.append(Fscore)
+                elif idx == 2:
+                    prec3.append(precision)
+                    rec3.append(recall)
+                    F3.append(Fscore)
+                hit += get_HT(vectorized_target, target_topi, num_ele)
+                ndcg = get_NDCG1(vectorized_target, target_topi, num_ele)
+                NDCG.append(ndcg)
+            if hit == next_k_step:
+                n_hit += 1
+        
+        ss = pd.read_csv('sample_submission.csv', sep=',')
+        ss['user_id'] = ss['id'].apply(lambda x: x.split(';')[0])
+        ss['cart'] = ss['id'].apply(lambda x: x.split(';')[1])
+
+        ddata = {test_key_set[i]: my_output[i] for i in range(len(test_key_set))}
+
+        print("matching target...")
+        tqdm.pandas()
+        ss['target'] = ss.progress_apply(lambda x: ddata[str(x['user_id'])][dictionary_table['MATERIAL_NUMBER'][str(x['cart'])]]\
+                                         if str(x['user_id']) in test_key_set\
+                                         else 0, axis=1)\
+                                        .astype(int)
+
+        # print('average precision of ' + ': ' + str(np.mean(prec)) + ' with std: ' + str(np.std(prec)))
+        recall = np.mean(rec)
+        ndcg = np.mean(NDCG)
+        hr = n_hit / len(test_key_set)
+
+    return ss[['id', 'target']], np.mean(F)
 
 def main(argv):
 
