@@ -677,7 +677,8 @@ def evaluate(data_chunk,  training_key_set, test_key_set, input_size, group_size
         hr = n_hit / len(test_key_set)
 
     return recall, ndcg, hr
-
+    
+def tifuknn()
 
 def main(argv):
 
