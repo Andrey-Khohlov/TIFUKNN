@@ -1,7 +1,9 @@
 # TIFUKNN
 
-Можно запускать как библиотеку: import tifuknn 
+Можно запускать как библиотеку: import tifuknn.
+ 
 Это вернет target и F1:
+
 df_target, f_score = tifuknn.tifuknn(history_file, future_file, topk, 300, 0.9, 0.7, 0.7, 7) 
 
 This is our implementation for the paper: 
